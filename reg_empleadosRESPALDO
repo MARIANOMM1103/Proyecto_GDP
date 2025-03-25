@@ -1,9 +1,121 @@
 #include <iostream>
 #include <string>
 #include <mysql/mysql.h>
-#include <limits>   
+#include <limits>   // para numeric_limits
 #include <cstdio>   
+#include <cstring> 
+
 using namespace std;
+
+// =================================================
+//       Gestionamos la conexión
+// =================================================
+class ConexionDB {
+public:
+    static MYSQL* conectar();
+};
+
+MYSQL* ConexionDB::conectar() {
+    MYSQL* conn = mysql_init(nullptr);
+    if (!conn) {
+        cerr << "Error al inicializar MySQL." << endl;
+        return nullptr;
+    }
+
+    // Ajusta estos parámetros según tu entorno:
+    conn = mysql_real_connect(
+        conn, 
+        "localhost",    // Host
+        "usuario",      // Usuario de MySQL
+        "password",     // Contraseña de MySQL
+        "basedatos",    // Nombre de la base de datos
+        3306,           // Puerto
+        NULL,           // Socket
+        0
+    );
+
+    if (!conn) {
+        cerr << "Error al conectar: " << mysql_error(conn) << endl;
+        return nullptr;
+    }
+    return conn;
+}
+
+// =================================================
+//      Clase usuario para poder gestionar
+// =================================================
+class Usuario {
+public:
+    static bool iniciarSesion(MYSQL* conn, const string& usuario, const string& contrasena);
+};
+
+bool Usuario::iniciarSesion(MYSQL* conn, const string& usuario, const string& contrasena) {
+    if (!conn) {
+        cerr << "Error: No hay conexión a la base de datos." << endl;
+        return false;
+    }
+
+    // Consulta parametrizada para evitar inyección SQL
+    const char* query = "SELECT COUNT(*) FROM usuarios WHERE usuario = ? AND contrasena = ?";
+    
+    MYSQL_STMT* stmt = mysql_stmt_init(conn);
+    if (!stmt) {
+        cerr << "Error al inicializar statement: " << mysql_error(conn) << endl;
+        return false;
+    }
+
+    if (mysql_stmt_prepare(stmt, query, strlen(query)) != 0) {
+        cerr << "Error al preparar statement: " << mysql_stmt_error(stmt) << endl;
+        mysql_stmt_close(stmt);
+        return false;
+    }
+
+    // Enlazar parámetros (usuario, contrasena)
+    MYSQL_BIND bind[2];
+    memset(bind, 0, sizeof(bind));
+
+    // Parámetro 1 (usuario)
+    bind[0].buffer_type   = MYSQL_TYPE_STRING;
+    bind[0].buffer        = (char*)usuario.c_str();
+    bind[0].buffer_length = usuario.length();
+
+    // Parámetro 2 (contrasena)
+    bind[1].buffer_type   = MYSQL_TYPE_STRING;
+    bind[1].buffer        = (char*)contrasena.c_str();
+    bind[1].buffer_length = contrasena.length();
+
+    // Vinculamos e ejecutamos
+    mysql_stmt_bind_param(stmt, bind);
+    if (mysql_stmt_execute(stmt) != 0) {
+        cerr << "Error al ejecutar statement: " << mysql_stmt_error(stmt) << endl;
+        mysql_stmt_close(stmt);
+        return false;
+    }
+
+    // Enlazamos el resultado (el COUNT(*))
+    MYSQL_BIND result_bind;
+    memset(&result_bind, 0, sizeof(result_bind));
+
+    int count = 0;
+    result_bind.buffer_type = MYSQL_TYPE_LONG;
+    result_bind.buffer = &count;
+
+    if (mysql_stmt_bind_result(stmt, &result_bind) != 0) {
+        cerr << "Error al enlazar resultado: " << mysql_stmt_error(stmt) << endl;
+        mysql_stmt_close(stmt);
+        return false;
+    }
+
+    if (mysql_stmt_fetch(stmt) == MYSQL_NO_DATA) {
+        cerr << "No se pudieron obtener datos del statement." << endl;
+        mysql_stmt_close(stmt);
+        return false;
+    }
+
+    mysql_stmt_close(stmt);
+    return (count > 0);
+}
+
 
 class Empleado {
 public:
@@ -40,7 +152,8 @@ void Empleado::registrar(MYSQL* conn) {
     cout << "\n--- Registrar Nuevo Empleado ---\n";
     cout << "ID (número): ";
     cin >> id;
-    cin.ignore(numeric_limits<streamsize>::max(), '\n'); // Limpia el buffer
+    // Limpiar buffer
+    cin.ignore(numeric_limits<streamsize>::max(), '\n'); 
 
     cout << "CURP (18 caracteres): ";
     getline(cin, curp);
@@ -74,12 +187,12 @@ void Empleado::registrar(MYSQL* conn) {
     getline(cin, fechaIngreso);
 
     // Construimos la consulta de inserción
-    string query = 
+    string query =
         "INSERT INTO empleados (id, curp, nombreCompleto, puesto, direccion, "
         "empresaAsignada, tipoContrato, numeroCredencial, estado, fechaIngreso) "
         "VALUES (" + to_string(id) + ", '" + curp + "', '" + nombreCompleto + "', '" 
-        + puesto + "', '" + direccion + "', '" + empresaAsignada + "', '" 
-        + tipoContrato + "', '" + numeroCredencial + "', '" + estado + "', '" 
+        + puesto + "', '" + direccion + "', '" + empresaAsignada + "', '"
+        + tipoContrato + "', '" + numeroCredencial + "', '" + estado + "', '"
         + fechaIngreso + "')";
 
     // Se ejecuta la consulta
@@ -103,7 +216,6 @@ void Empleado::editar(MYSQL* conn) {
     cin.ignore(numeric_limits<streamsize>::max(), '\n');
 
     // Verificamos si existe el empleado
-    // (Podrías usar una consulta SELECT para mostrarle los datos actuales antes de editarlos)
     {
         string checkQuery = "SELECT id FROM empleados WHERE id = " + to_string(idEditar);
         if (mysql_query(conn, checkQuery.c_str()) != 0) {
@@ -125,7 +237,8 @@ void Empleado::editar(MYSQL* conn) {
     }
 
     // Pedimos los datos actualizados al usuario
-    string nuevoNombre, nuevoPuesto, nuevaDireccion, nuevaEmpresa, nuevoTipo, nuevaCredencial, nuevoEstado, nuevaFecha;
+    string nuevoNombre, nuevoPuesto, nuevaDireccion, nuevaEmpresa, nuevoTipo;
+    string nuevaCredencial, nuevoEstado, nuevaFecha;
     cout << "Ingrese el nuevo Nombre Completo: ";
     getline(cin, nuevoNombre);
     cout << "Ingrese el nuevo Puesto: ";
@@ -144,7 +257,7 @@ void Empleado::editar(MYSQL* conn) {
     getline(cin, nuevaFecha);
 
     // Creamos la consulta UPDATE
-    string updateQuery = 
+    string updateQuery =
         "UPDATE empleados SET "
         "nombreCompleto = '" + nuevoNombre + "', "
         "puesto = '" + nuevoPuesto + "', "
@@ -217,9 +330,11 @@ void Empleado::buscar(MYSQL* conn) {
     cin.ignore(numeric_limits<streamsize>::max(), '\n');
 
     // Creamos la consulta SELECT
-    string selectQuery = "SELECT id, curp, nombreCompleto, puesto, direccion, empresaAsignada, tipoContrato, "
-                         "numeroCredencial, estado, fechaIngreso "
-                         "FROM empleados WHERE id = " + to_string(idBuscar);
+    string selectQuery =
+        "SELECT id, curp, nombreCompleto, puesto, direccion, empresaAsignada, "
+        "tipoContrato, numeroCredencial, estado, fechaIngreso "
+        "FROM empleados WHERE id = " + to_string(idBuscar);
+
     if (mysql_query(conn, selectQuery.c_str()) != 0) {
         cerr << "Error al buscar empleado: " << mysql_error(conn) << endl;
         return;
@@ -257,4 +372,77 @@ void Empleado::buscar(MYSQL* conn) {
 
     mysql_free_result(res);
 }
+//Función para mostrar el menú//
+void mostrarMenu(MYSQL* conn) {
+    int opcion;
+    do {
+        cout << "\n--- Menú Principal ---\n";
+        cout << "1. Registrar Empleado\n";
+        cout << "2. Editar Empleado\n";
+        cout << "3. Eliminar Empleado\n";
+        cout << "4. Buscar Empleado\n";
+        cout << "5. Salir\n";
+        cout << "Seleccione una opción: ";
+        cin >> opcion;
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
 
+        switch (opcion) {
+        case 1: {
+            // Registrar
+            Empleado emp;
+            emp.registrar(conn);
+            break;
+        }
+        case 2:
+            // Editar
+            Empleado::editar(conn);
+            break;
+        case 3:
+            // Eliminar
+            Empleado::eliminar(conn);
+            break;
+        case 4:
+            // Buscar
+            Empleado::buscar(conn);
+            break;
+        case 5:
+            cout << "Saliendo..." << endl;
+            break;
+        default:
+            cout << "Opción no válida. Intente nuevamente." << endl;
+        }
+    } while (opcion != 5);
+}
+
+
+int main() {
+    // 1) Conectar a la base de datos
+    MYSQL* conn = ConexionDB::conectar();
+    if (!conn) {
+        // Si la conexión falla, terminamos
+        return 1;
+    }
+
+    // 2) Pedir credenciales de usuario
+    string usuario, contrasena;
+    cout << "Usuario: ";
+    cin >> usuario;
+    cout << "Contraseña: ";
+    cin >> contrasena;
+
+    // 3) Intentar iniciar sesión
+    if (!Usuario::iniciarSesion(conn, usuario, contrasena)) {
+        cerr << "Error: Credenciales incorrectas." << endl;
+        mysql_close(conn);
+        return 1;
+    }
+
+    cout << "Inicio de sesión exitoso." << endl;
+
+    // 4) Mostrar el menú principal
+    mostrarMenu(conn);
+
+    // 5) Cerrar la conexión
+    mysql_close(conn);
+    return 0;
+}
